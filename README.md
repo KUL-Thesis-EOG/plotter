@@ -6,6 +6,8 @@ A PyQt6-based application that functions as a dual-channel oscilloscope for Ardu
 
 This application provides a real-time visualization and recording system for analog signals from an Arduino. It features dual-channel oscilloscope displays, comprehensive control panels, participant management, and experimental data recording capabilities.
 
+![Application](images/App.png)
+
 ## Features
 
 - **Real-time dual-channel oscilloscope display**

@@ -41,11 +41,14 @@ class OscilloscopeDisplay(QtWidgets.QWidget):
         self.plot_graph.setXRange(0, self.time_range)
         self.plot_graph.setYRange(0, 5)
 
-        # Initialize buffers
-        self.buffer_size: int = 10000  # Increased buffer size
+        # Calculate buffer size based on 30 seconds of data
+        self.retention_time: float = 30.0  # Keep only the last 30 seconds of data
+        self.samples_per_second: int = 500  # Estimated sample rate
+        self.buffer_size: int = int(self.retention_time * self.samples_per_second * 1.5)  # Buffer with 50% margin
         self.time_data: np.ndarray = np.zeros(self.buffer_size)
         self.voltage_data: np.ndarray = np.zeros(self.buffer_size)
         self.data_index: int = 0
+        self.latest_time: float = 0.0  # Track the latest timestamp
 
         # Create the line plot
         pen = pg.mkPen(color=pen_color, width=2)
@@ -112,13 +115,36 @@ class OscilloscopeDisplay(QtWidgets.QWidget):
         self.time_data = np.zeros(self.buffer_size)
         self.voltage_data = np.zeros(self.buffer_size)
         self.data_index = 0
+        self.latest_time = 0.0
         self.signal_line.setData(self.time_data[:1], self.voltage_data[:1])
         self.data_changed = False
         self.pending_update = False
 
     def add_data_point(self, time_point: float, voltage: float) -> None:
         """Add a new data point to the oscilloscope"""
-        # Update buffers
+        # Update latest time point
+        self.latest_time = time_point
+        
+        # Check if we need to trim old data (older than retention_time)
+        if self.data_index > 0 and self.data_index >= self.buffer_size * 0.75:  # Start checking when buffer is 75% full
+            # Find data points that are older than retention_time seconds
+            cutoff_time = self.latest_time - self.retention_time
+            # Find the index of the first data point that's newer than the cutoff
+            newer_indices = np.where(self.time_data[:self.data_index] >= cutoff_time)[0]
+            
+            if len(newer_indices) > 0 and newer_indices[0] > 0:
+                # Keep only data within retention window
+                keep_idx = newer_indices[0]
+                keep_count = self.data_index - keep_idx
+                
+                # Shift data to start of buffer
+                self.time_data[:keep_count] = self.time_data[keep_idx:self.data_index]
+                self.voltage_data[:keep_count] = self.voltage_data[keep_idx:self.data_index]
+                
+                # Update data index
+                self.data_index = keep_count
+        
+        # Add new data point
         if self.data_index < self.buffer_size:
             self.time_data[self.data_index] = time_point
             self.voltage_data[self.data_index] = voltage
@@ -138,13 +164,13 @@ class OscilloscopeDisplay(QtWidgets.QWidget):
                 QTimer.singleShot(int(self.update_interval * 1000), self._delayed_update)
                 self.pending_update = True
         else:
-            # Buffer is full, start overwriting old data
-            # Shift all data back by 1000 samples
-            shift_amount = 1000
+            # Buffer is completely full, shift data to make room
+            # This should rarely happen due to our trimming logic above
+            shift_amount = self.buffer_size // 4  # Shift by 25% of buffer
             self.time_data[:-shift_amount] = self.time_data[shift_amount:]
             self.voltage_data[:-shift_amount] = self.voltage_data[shift_amount:]
             self.data_index -= shift_amount
-
+            
             # Continue with the new sample
             self.add_data_point(time_point, voltage)
             

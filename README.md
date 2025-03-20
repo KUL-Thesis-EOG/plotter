@@ -122,19 +122,31 @@ Where:
 
 Example Arduino sketch:
 ```cpp
+int sensorPin1 = A0;  // input pin for the first potentiometer
+int sensorPin2 = A1;  // input pin for the second potentiometer
+int digitalValue1 = 0;  // variable to store the value from A0
+int digitalValue2 = 0;  // variable to store the value from A1
+unsigned long nextSampleTime = 0;  // time for the next sample
+const unsigned long samplePeriod = 2000;  // 2000 microseconds = 2ms = 500Hz
+
 void setup() {
   Serial.begin(115200);
+  nextSampleTime = micros();  // Initialize next sample time
 }
 
 void loop() {
-  int vertical = analogRead(A0);
-  int horizontal = analogRead(A1);
+  unsigned long currentTime = micros();
   
-  Serial.print(vertical);
-  Serial.print(",");
-  Serial.println(horizontal);
-  
-  delay(10); // 100Hz sample rate
+  if ((long)(currentTime - nextSampleTime) >= 0) {
+    digitalValue1 = analogRead(sensorPin1);
+    digitalValue2 = analogRead(sensorPin2);
+    
+    Serial.print(digitalValue1);
+    Serial.print(",");
+    Serial.println(digitalValue2);
+    
+    nextSampleTime += samplePeriod;
+  }
 }
 ```
 

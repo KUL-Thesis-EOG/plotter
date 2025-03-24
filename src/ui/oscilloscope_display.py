@@ -4,6 +4,7 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt6 import QtWidgets
 from PyQt6.QtCore import pyqtSignal, pyqtSlot, QTimer
+from collections import deque
 
 
 class OscilloscopeDisplay(QtWidgets.QWidget):
@@ -43,7 +44,7 @@ class OscilloscopeDisplay(QtWidgets.QWidget):
 
         # Calculate buffer size based on 30 seconds of data
         self.retention_time: float = 30.0  # Keep only the last 30 seconds of data
-        self.samples_per_second: int = 500  # Estimated sample rate
+        self.samples_per_second: int = 1000  # Estimated sample rate
         self.buffer_size: int = int(self.retention_time * self.samples_per_second * 1.5)  # Buffer with 50% margin
         self.time_data: np.ndarray = np.zeros(self.buffer_size)
         self.voltage_data: np.ndarray = np.zeros(self.buffer_size)
@@ -58,9 +59,14 @@ class OscilloscopeDisplay(QtWidgets.QWidget):
         
         # Performance optimization variables
         self.last_update_time = time.time()
-        self.update_interval = 0.01  # Minimum seconds between display updates (20fps)
+        self.update_interval = 0.01 
         self.pending_update = False
         self.data_changed = False
+        
+        # Moving average filter for display
+        self.moving_avg_window_size = int(1.0 / self.update_interval)  # Window size based on refresh rate
+        self.moving_avg_buffer = deque(maxlen=self.moving_avg_window_size)
+        self.filtered_voltage_data = np.zeros(self.buffer_size)
 
     @pyqtSlot(int)
     def set_time_range(self, seconds: int) -> None:
@@ -114,6 +120,8 @@ class OscilloscopeDisplay(QtWidgets.QWidget):
         """Reset the oscilloscope plot data"""
         self.time_data = np.zeros(self.buffer_size)
         self.voltage_data = np.zeros(self.buffer_size)
+        self.filtered_voltage_data = np.zeros(self.buffer_size)
+        self.moving_avg_buffer.clear()
         self.data_index = 0
         self.latest_time = 0.0
         self.signal_line.setData(self.time_data[:1], self.voltage_data[:1])
@@ -148,6 +156,14 @@ class OscilloscopeDisplay(QtWidgets.QWidget):
         if self.data_index < self.buffer_size:
             self.time_data[self.data_index] = time_point
             self.voltage_data[self.data_index] = voltage
+            
+            # Update moving average buffer and calculate filtered value
+            self.moving_avg_buffer.append(voltage)
+            if len(self.moving_avg_buffer) > 0:
+                self.filtered_voltage_data[self.data_index] = sum(self.moving_avg_buffer) / len(self.moving_avg_buffer)
+            else:
+                self.filtered_voltage_data[self.data_index] = voltage
+                
             self.data_index += 1
             self.data_changed = True  # Mark data as changed
             
@@ -186,11 +202,12 @@ class OscilloscopeDisplay(QtWidgets.QWidget):
         if not self.data_changed or self.data_index == 0:
             return
             
-        # Update plot with current data
-        visible_data = self.voltage_data[: self.data_index]
-        self.signal_line.setData(self.time_data[: self.data_index], visible_data)
+        # Update plot with filtered data for display
+        visible_filtered_data = self.filtered_voltage_data[: self.data_index]
+        self.signal_line.setData(self.time_data[: self.data_index], visible_filtered_data)
 
-        # Emit signal with updated data
+        # Emit signal with original data (not filtered) for saving
+        visible_data = self.voltage_data[: self.data_index]
         self.dataUpdated.emit(visible_data, self.time_data[: self.data_index])
         self.data_changed = False
 

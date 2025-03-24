@@ -14,7 +14,7 @@ class TimeControlPanel(QtWidgets.QGroupBox):
         self.layout = QtWidgets.QHBoxLayout(self)
 
         # Add time range buttons (removed 1s and 2s options)
-        self.time_ranges: List[int] = [5, 10, 20]
+        self.time_ranges: List[int] = [2, 4, 10]
         for t_range in self.time_ranges:
             btn = QtWidgets.QPushButton(f"{t_range}s")
             btn.clicked.connect(lambda checked, r=t_range: self.set_time_range(r))

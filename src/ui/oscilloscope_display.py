@@ -1,10 +1,12 @@
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, List
 import time
 import numpy as np
 import pyqtgraph as pg
 from PyQt6 import QtWidgets
 from PyQt6.QtCore import pyqtSignal, pyqtSlot, QTimer
 from collections import deque
+from scipy import signal
+import math
 
 
 class OscilloscopeDisplay(QtWidgets.QWidget):
@@ -63,27 +65,77 @@ class OscilloscopeDisplay(QtWidgets.QWidget):
         self.pending_update = False
         self.data_changed = False
         
-        # Moving average filter for display
-        self.moving_avg_window_size = int(1.0 / self.update_interval)  # Window size based on refresh rate
-        self.moving_avg_buffer = deque(maxlen=self.moving_avg_window_size)
+        # Anti-aliasing and downsampling for display
         self.filtered_voltage_data = np.zeros(self.buffer_size)
+        
+        # Downsampling parameters - will be adjusted based on time range
+        self.max_points_displayed = 2000  # Maximum points to display for optimal performance
+        self.downsampling_factor = 1      # Will be adjusted based on time range
+        self.last_downsample_count = 0    # Track last number of points after downsampling
+        
+        # For low-pass filtering (anti-aliasing)
+        self.filter_kernel_size = 8       # Base kernel size for anti-aliasing filter
+        self.use_savgol = True            # Whether to use Savitzky-Golay filtering
 
     @pyqtSlot(int)
     def set_time_range(self, seconds: int) -> None:
         """Change the time range of the x-axis"""
         self.time_range = seconds
-
+        
+        # Adjust anti-aliasing and downsampling parameters based on time range
         if self.data_index > 0:
-            # Update the view to show the most recent data
+            # Calculate optimal downsampling based on time range
+            # Estimate how many samples are in the current view
+            data_time_span = self.time_data[self.data_index - 1] - self.time_data[0]
+            if data_time_span > 0:
+                # Estimate samples per second
+                samples_per_second = self.data_index / data_time_span
+                # Estimate samples in view
+                samples_in_view = samples_per_second * seconds
+                
+                # Adjust downsampling factor to target max_points_displayed
+                if samples_in_view > self.max_points_displayed:
+                    self.downsampling_factor = max(1, int(samples_in_view / self.max_points_displayed))
+                else:
+                    self.downsampling_factor = 1
+                
+                # Adjust filter kernel size based on downsampling factor
+                # Larger downsampling requires wider filter for anti-aliasing
+                self.filter_kernel_size = min(51, max(5, self.downsampling_factor * 2 + 1))
+                
+                # Must be odd for Savitzky-Golay filter
+                if self.filter_kernel_size % 2 == 0:
+                    self.filter_kernel_size += 1
+            
+            # Get current view state
+            view_range = self.plot_graph.viewRange()[0]
             current_time = self.time_data[self.data_index - 1]
+            
+            # Check if we're following the most recent data
+            auto_scroll_active = abs(view_range[1] - current_time) < 0.5
+            
             # Disable auto-range before setting explicit range
             self.plot_graph.disableAutoRange(axis="x")
-            # Set the range to show the specified time window
-            self.plot_graph.setXRange(
-                max(0, current_time - self.time_range),
-                current_time,
-                padding=0,  # No padding
-            )
+            
+            if auto_scroll_active:
+                # If auto-scrolling, update to show most recent time window
+                self.plot_graph.setXRange(
+                    max(0, current_time - self.time_range),
+                    current_time,
+                    padding=0,  # No padding
+                )
+            else:
+                # If manually positioned, keep the right edge of view at same position
+                # but adjust the width of the window
+                self.plot_graph.setXRange(
+                    max(0, view_range[1] - self.time_range),
+                    view_range[1],
+                    padding=0,  # No padding
+                )
+                
+            # Recalculate filtered data with new parameters
+            self._recalculate_filtered_data()
+                
             # Ensure the view is updated immediately
             self.plot_graph.update()
 
@@ -94,16 +146,22 @@ class OscilloscopeDisplay(QtWidgets.QWidget):
             # Get the actual min and max time values from the data
             min_time = self.time_data[0]
             max_time = self.time_data[self.data_index - 1]
-
+            
+            # If there's not enough data, use a minimum range of 1 second
+            if max_time - min_time < 1.0:
+                center = (max_time + min_time) / 2
+                min_time = center - 0.5
+                max_time = center + 0.5
+            
             # Add a small padding (5%) for better visualization
             padding = (max_time - min_time) * 0.05
+            
+            # Disable auto range before setting explicit range
+            self.plot_graph.disableAutoRange(axis="x")
 
-            # Force the auto range first to clear any previous manual ranges
-            self.plot_graph.enableAutoRange(axis="x")
-
-            # Then set the explicit range with padding
+            # Set the explicit range with padding
             self.plot_graph.setXRange(
-                min_time,
+                max(0, min_time - padding),  # Ensure we don't go below 0
                 max_time + padding,
                 padding=0,  # No additional padding (we already added our own)
             )
@@ -121,12 +179,16 @@ class OscilloscopeDisplay(QtWidgets.QWidget):
         self.time_data = np.zeros(self.buffer_size)
         self.voltage_data = np.zeros(self.buffer_size)
         self.filtered_voltage_data = np.zeros(self.buffer_size)
-        self.moving_avg_buffer.clear()
         self.data_index = 0
         self.latest_time = 0.0
         self.signal_line.setData(self.time_data[:1], self.voltage_data[:1])
         self.data_changed = False
         self.pending_update = False
+        self.last_downsample_count = 0
+        
+        # Reset downsampling parameters
+        self.downsampling_factor = 1
+        self.filter_kernel_size = 8
 
     def add_data_point(self, time_point: float, voltage: float) -> None:
         """Add a new data point to the oscilloscope"""
@@ -157,12 +219,8 @@ class OscilloscopeDisplay(QtWidgets.QWidget):
             self.time_data[self.data_index] = time_point
             self.voltage_data[self.data_index] = voltage
             
-            # Update moving average buffer and calculate filtered value
-            self.moving_avg_buffer.append(voltage)
-            if len(self.moving_avg_buffer) > 0:
-                self.filtered_voltage_data[self.data_index] = sum(self.moving_avg_buffer) / len(self.moving_avg_buffer)
-            else:
-                self.filtered_voltage_data[self.data_index] = voltage
+            # Just store the raw data - we'll apply filtering when displaying
+            self.filtered_voltage_data[self.data_index] = voltage
                 
             self.data_index += 1
             self.data_changed = True  # Mark data as changed
@@ -197,32 +255,107 @@ class OscilloscopeDisplay(QtWidgets.QWidget):
             self._update_display(self.time_data[self.data_index - 1])
             self.last_update_time = time.time()
             
+    def _recalculate_filtered_data(self) -> None:
+        """Process all data with anti-aliasing filter and downsample for display"""
+        if self.data_index <= 0:
+            return
+            
+        # Get the raw data to process
+        raw_voltage = self.voltage_data[:self.data_index]
+        raw_time = self.time_data[:self.data_index]
+        
+        # Set up downsampling and filtering
+        filtered_data = raw_voltage.copy()  # Start with a copy of the raw data
+        
+        # Apply low-pass filter for anti-aliasing before downsampling
+        if len(filtered_data) > self.filter_kernel_size:
+            try:
+                if self.use_savgol:
+                    # Savitzky-Golay filter - better preserves peaks while smoothing
+                    polyorder = min(3, self.filter_kernel_size - 2)  # Must be less than window_length
+                    filtered_data = signal.savgol_filter(
+                        filtered_data, 
+                        window_length=self.filter_kernel_size,
+                        polyorder=polyorder
+                    )
+                else:
+                    # Compute a window with the Nyquist frequency of half the downsampling rate
+                    b = signal.firwin(
+                        self.filter_kernel_size, 
+                        1.0/self.downsampling_factor, 
+                        window='hamming'
+                    )
+                    filtered_data = signal.filtfilt(b, [1.0], filtered_data)
+            except Exception:
+                # Fallback to simpler mean if the filter fails
+                filtered_data = np.array(raw_voltage)
+        
+        # Downsample the data
+        if self.downsampling_factor > 1 and len(filtered_data) > self.downsampling_factor * 2:
+            # Calculate indices to keep after downsampling
+            # Using decimate would be ideal but might require more specific handling
+            indices = np.arange(0, len(filtered_data), self.downsampling_factor)
+            
+            # If there's remaining data that doesn't divide evenly, include the last point
+            if indices[-1] < len(filtered_data) - 1:
+                indices = np.append(indices, len(filtered_data) - 1)
+                
+            # Get the downsampled data
+            times = raw_time[indices]
+            values = filtered_data[indices]
+            
+            self.last_downsample_count = len(indices)
+        else:
+            # No downsampling needed
+            times = raw_time
+            values = filtered_data
+            self.last_downsample_count = len(values)
+        
+        # Update the plot with anti-aliased and downsampled data
+        self.signal_line.setData(times, values)
+        
     def _update_display(self, current_time: float) -> None:
         """Update the display with current data"""
         if not self.data_changed or self.data_index == 0:
             return
+        
+        # Check if we need to adjust downsampling based on data growth
+        data_time_span = self.time_data[self.data_index - 1] - self.time_data[0]
+        if data_time_span > 0:
+            # Calculate estimated samples in the current time window
+            samples_per_second = self.data_index / data_time_span
+            samples_in_view = samples_per_second * self.time_range
             
-        # Update plot with filtered data for display
-        visible_filtered_data = self.filtered_voltage_data[: self.data_index]
-        self.signal_line.setData(self.time_data[: self.data_index], visible_filtered_data)
-
-        # Emit signal with original data (not filtered) for saving
+            # Update downsampling factor if needed
+            new_factor = max(1, int(samples_in_view / self.max_points_displayed))
+            if new_factor != self.downsampling_factor:
+                self.downsampling_factor = new_factor
+                # Adjust filter kernel size based on new downsampling factor
+                self.filter_kernel_size = min(51, max(5, self.downsampling_factor * 2 + 1))
+                if self.filter_kernel_size % 2 == 0:
+                    self.filter_kernel_size += 1
+        
+        # Apply anti-aliasing filter and downsample
+        self._recalculate_filtered_data()
+        
+        # Emit signal with original data (not filtered) for statistics and recording
         visible_data = self.voltage_data[: self.data_index]
         self.dataUpdated.emit(visible_data, self.time_data[: self.data_index])
         self.data_changed = False
 
-        # Update view window to show the most recent data
-        if self.data_index > 1:  # Only update if we have at least one point
-            # Only update the view if we're not in "view all" mode
-            # Check if the current view range is approximately what we'd expect for the time window
-            view_range = self.plot_graph.viewRange()[0]  # Get current x-axis view range
-            expected_min = max(0, current_time - self.time_range)
-
-            # If the view is close to the expected window or the view's right edge is near current_time,
-            # then update to follow the signal
-            if abs(view_range[1] - current_time) < 0.5:  # If right edge is within 0.5s of current time
-                self.plot_graph.setXRange(expected_min, current_time, padding=0)
-                self.plot_graph.update()
+        # Store current view state to determine if auto-scrolling is active
+        view_range = self.plot_graph.viewRange()[0]  # Get current x-axis view range
+        expected_min = max(0, current_time - self.time_range)
+        expected_max = current_time
+        
+        # Check if we're in auto-scrolling mode (right edge follows the data)
+        auto_scroll_active = abs(view_range[1] - current_time) < 0.5  # Right edge is near current time
+        
+        # Update view window based on auto-scroll state
+        if self.data_index > 1 and auto_scroll_active:  # Only update if we have at least one point
+            # Update the view to follow the signal with a stable time window
+            self.plot_graph.setXRange(expected_min, expected_max, padding=0)
+            self.plot_graph.update()
 
 
 class VerticalChannelDisplay(OscilloscopeDisplay):

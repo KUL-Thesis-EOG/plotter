@@ -131,9 +131,15 @@ class OscilloscopeApp(QtWidgets.QMainWindow):
     def handle_connection_status(self, connected: bool, message: str) -> None:
         """Handle connection status changes with potential alerts"""
         # Show message box for any disconnection except manual "Disconnected" action
-        if not connected and message != "Disconnected":
-            self.status_message_box.setText(message)
-            self.status_message_box.show()
+        if not connected:
+            # Reset oscilloscope displays and clear buffers when device is disconnected
+            self.vertical_channel.reset_plot()
+            self.horizontal_channel.reset_plot()
+            
+            # Show alert message for unexpected disconnections
+            if message != "Disconnected":
+                self.status_message_box.setText(message)
+                self.status_message_box.show()
 
     def register_participant(self, participant_id: int) -> None:
         """Register a participant in the data recorder"""

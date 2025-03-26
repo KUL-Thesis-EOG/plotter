@@ -1,31 +1,8 @@
-from typing import Optional, Tuple, List
+from typing import Optional
 from PyQt6 import QtWidgets, QtCore
 
-from src.ui.time_control import TimeControlPanel
-from src.ui.voltage_control import VoltageControlPanel
-from src.ui.statistics import StatisticsPanel
 from src.ui.serial_control import SerialControlPanel
 from src.ui.participant_control import ParticipantControlPanel
-
-
-class ChannelControlPanel(QtWidgets.QGroupBox):
-    """Controls for a specific channel"""
-
-    def __init__(
-        self, channel_name: str, parent: Optional[QtWidgets.QWidget] = None
-    ) -> None:
-        super().__init__(f"{channel_name} Controls", parent)
-        self.layout = QtWidgets.QVBoxLayout(self)
-
-        # Create sub-panels for this channel
-        self.time_panel = TimeControlPanel()
-        self.voltage_panel = VoltageControlPanel()
-        self.stats_panel = StatisticsPanel(channel_name)
-
-        # Add panels to layout
-        self.layout.addWidget(self.time_panel)
-        self.layout.addWidget(self.voltage_panel)
-        self.layout.addWidget(self.stats_panel)
 
 
 class ControlPanel(QtWidgets.QWidget):
@@ -69,21 +46,7 @@ class ControlPanel(QtWidgets.QWidget):
             self.sessionResumeRequested
         )
         self.participant_panel.sessionEndRequested.connect(self.sessionEndRequested)
-
-        # Create horizontal layout for channel controls
-        self.channels_layout = QtWidgets.QHBoxLayout()
-
-        # Create channel control panels
-        self.vertical_channel_panel = ChannelControlPanel("Vertical Channel")
-        self.horizontal_channel_panel = ChannelControlPanel("Horizontal Channel")
-
-        # Add channel panels to layout
-        self.channels_layout.addWidget(self.vertical_channel_panel)
-        self.channels_layout.addWidget(self.horizontal_channel_panel)
-
-        # Add channel layout to main layout
-        self.main_layout.addLayout(self.channels_layout)
-
+        
         # Set stretch factors to make top panels take minimal space
         self.main_layout.setStretch(0, 0)  # Top panels - minimal space
         self.main_layout.setStretch(1, 1)  # Channel panels - all remaining space

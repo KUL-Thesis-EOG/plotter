@@ -1,13 +1,12 @@
 import os
 import time
 import csv
-import threading
-from typing import Optional, List, Tuple, Dict, Any, TextIO, cast
-from PyQt6.QtCore import QObject, pyqtSignal
+from typing import Optional, List, Tuple, Any, TextIO
+from PyQt6.QtCore import QObject, pyqtSignal, QTimer
 
 
 class DataRecorder(QObject):
-    """Ultra-minimal data recorder using CSV files"""
+    """Ultra-minimal data recorder using CSV files - Simplified for robustness"""
 
     statusChanged = pyqtSignal(bool, str)
 
@@ -37,69 +36,14 @@ class DataRecorder(QObject):
         self.csv_writer: Any = None
 
         # Buffer for measurements
-        self.buffer: List[Tuple[float, float, float, float]] = []
-        self.buffer_lock = threading.Lock()
+        self.buffer: List[Tuple[float, float, float]] = []
 
-        # Background worker for writing data
-        self.stop_event = threading.Event()
-        self.worker_thread = threading.Thread(
-            target=self._background_worker, daemon=True
-        )
-        self.worker_thread.start()
+        # Qt Timer for flushing data instead of using a separate thread
+        self.flush_timer = QTimer(self)
+        self.flush_timer.timeout.connect(self._check_and_flush_buffer)
+        self.flush_timer.start(200)  # Check every 200ms
 
         self.statusChanged.emit(True, "Data recorder initialized")
-
-    def _init_metadata_files(self) -> None:
-        """Initialize metadata files if they don't exist"""
-        # Create participants file if it doesn't exist
-        if not os.path.exists(self.participants_file):
-            with open(self.participants_file, "w", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerow(["participant_id", "created_at"])
-
-        # Create sessions file if it doesn't exist
-        if not os.path.exists(self.sessions_file):
-            with open(self.sessions_file, "w", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerow(
-                    ["session_id", "participant_id", "started_at", "data_file"]
-                )
-
-    def _background_worker(self) -> None:
-        """Background thread that periodically flushes data"""
-        buffer_threshold = 1000  # Only flush when buffer reaches this size for better performance
-        flush_interval = 1.0     # Minimum time between flushes in seconds
-        last_flush_time = time.time()
-        
-        while not self.stop_event.is_set():
-            try:
-                # Sleep briefly
-                time.sleep(0.5)  # Reduced check frequency to reduce CPU usage
-                
-                # Get current time
-                current_time = time.time()
-                time_since_last_flush = current_time - last_flush_time
-                
-                # Check if we need to flush the buffer
-                need_flush = False
-                buffer_size = 0
-                
-                with self.buffer_lock:
-                    buffer_size = len(self.buffer)
-                    
-                    # Force flush if:
-                    # 1. Buffer is large enough, or
-                    # 2. It's been a while since last flush and we have data
-                    if buffer_size >= buffer_threshold or (buffer_size > 0 and time_since_last_flush >= flush_interval):
-                        need_flush = True
-
-                if need_flush:
-                    self._flush_buffer()
-                    last_flush_time = time.time()
-                    
-            except Exception as e:
-                # Log the error but keep the thread running
-                self.statusChanged.emit(False, f"Worker thread error: {str(e)}")
 
     def _get_next_session_id(self) -> int:
         """Get the next available session ID"""
@@ -122,24 +66,49 @@ class DataRecorder(QObject):
             # If anything fails, start from 1
             return 1
 
+    def _init_metadata_files(self) -> None:
+        """Initialize metadata files if they don't exist"""
+        # Create participants file if it doesn't exist
+        if not os.path.exists(self.participants_file):
+            with open(self.participants_file, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(["participant_id", "created_at"])
+
+        # Create sessions file if it doesn't exist
+        if not os.path.exists(self.sessions_file):
+            with open(self.sessions_file, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(
+                    ["session_id", "participant_id", "started_at", "data_file"]
+                )
+                
+    def _check_and_flush_buffer(self) -> None:
+        """Check if buffer needs flushing and do it"""
+        buffer_threshold = 10
+        
+        if len(self.buffer) >= buffer_threshold or (self.buffer and not self.experiment_running):
+            self._flush_buffer()
+            
     def _flush_buffer(self) -> None:
         """Flush the current data buffer to file"""
-        with self.buffer_lock:
-            if not self.buffer or not self.data_file_handle:
-                return
+        if not self.buffer or not self.data_file_handle:
+            return
 
-            # Get reference to buffer and clear it
-            buffer_copy = self.buffer[:]
-            self.buffer = []
+        # Get reference to buffer and clear it
+        buffer_copy = self.buffer[:]
+        self.buffer = []
 
         # Write data
         try:
             if self.csv_writer and self.data_file_handle:
-                for ts, elapsed, vert, horiz in buffer_copy:
-                    self.csv_writer.writerow([ts, elapsed, vert, horiz])
+                for timestamp, vert, horiz in buffer_copy:
+                    # Write timestamp and raw voltage values
+                    self.csv_writer.writerow([timestamp, vert, horiz])
 
                 # Force flush to disk
                 self.data_file_handle.flush()
+                # Also force OS to write to disk for extra safety
+                os.fsync(self.data_file_handle.fileno())
         except Exception as e:
             self.statusChanged.emit(False, f"Error writing data: {str(e)}")
 
@@ -203,8 +172,11 @@ class DataRecorder(QObject):
             self.data_file_handle = open(self.data_file, "w", newline="")
             self.csv_writer = csv.writer(self.data_file_handle)
             self.csv_writer.writerow(
-                ["timestamp", "elapsed_time", "vertical_value", "horizontal_value"]
+                ["timestamp", "vertical_value", "horizontal_value"]
             )
+            # Force immediate write of header
+            self.data_file_handle.flush()
+            os.fsync(self.data_file_handle.fileno())
 
             # Record session in sessions file
             with open(self.sessions_file, "a", newline="") as f:
@@ -235,24 +207,27 @@ class DataRecorder(QObject):
             return False
 
     def store_measurement(
-        self, elapsed_time: float, vertical_value: float, horizontal_value: float
+        self, time_point: float, vertical_value: float, horizontal_value: float
     ) -> bool:
         """Store a measurement in the buffer"""
         if not self.experiment_running or self.session_id is None:
             return False
 
-        # Add to buffer - absolutely minimal work on the main thread
-        with self.buffer_lock:
+        try:
+            # Add to buffer - store timestamp and raw values
             self.buffer.append(
-                (time.time(), elapsed_time, vertical_value, horizontal_value)
+                (time.time(), vertical_value, horizontal_value)
             )
-
-        return True
+            return True
+        except Exception as e:
+            self.statusChanged.emit(False, f"Error storing measurement: {str(e)}")
+            return False
 
     def pause_session(self) -> None:
         """Pause the current session"""
         if self.experiment_running:
             self.experiment_running = False
+            # Immediately flush buffer on pause
             self._flush_buffer()
             self.statusChanged.emit(True, f"Session {self.session_id} paused")
 
@@ -267,14 +242,20 @@ class DataRecorder(QObject):
         if not self.session_id:
             return
 
-        # Stop recording and ensure data is written
+        # Stop recording and ensure all data is written
         self.experiment_running = False
         self._flush_buffer()
 
         # Close the data file
         if self.data_file_handle:
-            self.data_file_handle.close()
-            self.data_file_handle = None
+            try:
+                self.data_file_handle.flush()
+                os.fsync(self.data_file_handle.fileno())
+                self.data_file_handle.close()
+            except Exception as e:
+                self.statusChanged.emit(False, f"Error closing file: {str(e)}")
+            finally:
+                self.data_file_handle = None
 
         self.statusChanged.emit(True, f"Session {self.session_id} ended")
 
@@ -289,20 +270,19 @@ class DataRecorder(QObject):
         if self.experiment_running:
             self.end_session()
 
-        # Signal background thread to stop
-        self.stop_event.set()
-
-        if self.worker_thread.is_alive():
-            self.worker_thread.join(2.0)
-            # If thread didn't terminate, log it but continue cleanup
-            if self.worker_thread.is_alive():
-                self.statusChanged.emit(False, "Warning: Data recorder thread didn't terminate properly")
+        # Stop the flush timer
+        self.flush_timer.stop()
+        
+        # Flush any remaining data immediately
+        self._flush_buffer()
 
         # Close file handle if somehow not closed yet
         if self.data_file_handle:
             try:
+                self.data_file_handle.flush()
+                os.fsync(self.data_file_handle.fileno())
                 self.data_file_handle.close()
-            except:
+            except Exception:
                 pass
             self.data_file_handle = None
 

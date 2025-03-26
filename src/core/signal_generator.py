@@ -19,7 +19,6 @@ class SerialSignalGenerator(QObject):
         super().__init__(parent)
         self.baud_rate: int = baud_rate
         self.serial_port = QSerialPort(self)
-        self.elapsed_time: float = 0.0
         self.last_timestamp: float = time.time()
         self.last_data_received: float = 0.0
         self.buffer: str = ""
@@ -78,7 +77,6 @@ class SerialSignalGenerator(QObject):
                 return
 
             # Reset time tracking and flags
-            self.elapsed_time = 0.0
             self.last_timestamp = time.time()
             self.last_data_received = time.time()
             self.buffer = ""
@@ -97,11 +95,18 @@ class SerialSignalGenerator(QObject):
     def disconnect(self) -> None:
         """Disconnect from the serial port"""
         # Stop the data watchdog timer
-        self.data_watchdog.stop()
+        if self.data_watchdog.isActive():
+            self.data_watchdog.stop()
 
-        if self.serial_port.isOpen():
-            self.serial_port.close()
-            self.connectionStatusChanged.emit(False, "Disconnected")
+        # Make sure to handle cleanup properly
+        try:
+            if self.serial_port.isOpen():
+                # Ensure no pending data before closing
+                self.serial_port.clear()
+                self.serial_port.close()
+                self.connectionStatusChanged.emit(False, "Disconnected")
+        except Exception as e:
+            print(f"Error during serial port disconnect: {e}")
 
     def _handle_error(self, error: QSerialPort.SerialPortError) -> None:
         """Handle serial port errors"""
@@ -190,19 +195,13 @@ class SerialSignalGenerator(QObject):
                 vertical_voltage = vertical_raw * conversion_factor
                 horizontal_voltage = horizontal_raw * conversion_factor
 
-                # Calculate timestamp
+                # Use timestamp directly (no elapsed time calculation)
                 current_time = time.time()
-                time_delta = current_time - self.last_timestamp
-                
-                # Prevent time jumps that could be caused by system time changes
-                if 0 < time_delta < 1.0:  # Normal range for data rate
-                    self.elapsed_time += time_delta
-                    
                 self.last_timestamp = current_time
 
                 # Emit the new sample with both channel values
                 self.newSample.emit(
-                    self.elapsed_time, vertical_voltage, horizontal_voltage
+                    current_time, vertical_voltage, horizontal_voltage
                 )
 
         except (ValueError, IndexError) as e:
@@ -232,6 +231,5 @@ class SerialSignalGenerator(QObject):
             return
 
     def reset(self) -> None:
-        """Reset the signal generator time"""
-        self.elapsed_time = 0.0
+        """Reset the signal generator time tracking"""
         self.last_timestamp = time.time()

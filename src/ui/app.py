@@ -3,17 +3,16 @@ from PyQt6 import QtWidgets, QtCore, QtGui
 # Import core components
 from src.core.signal_generator import SerialSignalGenerator
 from src.core.data_recorder import DataRecorder
-from src.core.database_backup import DatabaseBackup
 from src.ui.control_panel import ControlPanel
 from src.ui.oscilloscope_display import VerticalChannelDisplay, HorizontalChannelDisplay
 
 
 class OscilloscopeApp(QtWidgets.QMainWindow):
-    """Main oscilloscope application with dual channel display"""
+    """Main oscilloscope application with dual channel display (simplified)"""
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Arduino Serial Oscilloscope - Experiment Recorder")
+        self.setWindowTitle("Arduino Serial Oscilloscope - Simplified")
         self.resize(1200, 800)
 
         # Create main layout
@@ -25,7 +24,6 @@ class OscilloscopeApp(QtWidgets.QMainWindow):
         self.control_panel = ControlPanel()
         self.signal_generator = SerialSignalGenerator()
         self.data_recorder = DataRecorder()
-        self.database_backup = DatabaseBackup()
 
         # Create display layout for both oscilloscopes
         self.display_layout = QtWidgets.QHBoxLayout()
@@ -87,46 +85,14 @@ class OscilloscopeApp(QtWidgets.QMainWindow):
         self.data_recorder.statusChanged.connect(
             self.control_panel.participant_panel.update_database_status
         )
-        
-        # Connect database backup status to participant panel
-        self.database_backup.statusChanged.connect(
-            self.control_panel.participant_panel.update_database_status
-        )
 
-        # Connect vertical channel controls
-        self.control_panel.vertical_channel_panel.time_panel.timeRangeChanged.connect(
-            self.vertical_channel.set_time_range
-        )
-        self.control_panel.vertical_channel_panel.time_panel.viewAllRequested.connect(
-            self.vertical_channel.view_all_data
-        )
-        self.control_panel.vertical_channel_panel.voltage_panel.voltageRangeChanged.connect(
-            self.vertical_channel.set_voltage_range
-        )
-
-        # Connect horizontal channel controls
-        self.control_panel.horizontal_channel_panel.time_panel.timeRangeChanged.connect(
-            self.horizontal_channel.set_time_range
-        )
-        self.control_panel.horizontal_channel_panel.time_panel.viewAllRequested.connect(
-            self.horizontal_channel.view_all_data
-        )
-        self.control_panel.horizontal_channel_panel.voltage_panel.voltageRangeChanged.connect(
-            self.horizontal_channel.set_voltage_range
-        )
+        # Voltage range controls removed - using auto-scaling instead
 
         # Connect signal generator to both oscilloscope displays and data recording
         self.signal_generator.newSample.connect(self.vertical_channel.add_sample)
         self.signal_generator.newSample.connect(self.horizontal_channel.add_sample)
         self.signal_generator.newSample.connect(self.record_data_sample)
 
-        # Connect oscilloscope data updates to statistics panels
-        self.vertical_channel.dataUpdated.connect(
-            self.control_panel.vertical_channel_panel.stats_panel.update_statistics
-        )
-        self.horizontal_channel.dataUpdated.connect(
-            self.control_panel.horizontal_channel_panel.stats_panel.update_statistics
-        )
 
     def handle_connection_status(self, connected: bool, message: str) -> None:
         """Handle connection status changes with potential alerts"""
@@ -144,10 +110,7 @@ class OscilloscopeApp(QtWidgets.QMainWindow):
     def register_participant(self, participant_id: int) -> None:
         """Register a participant in the data recorder"""
         success = self.data_recorder.register_participant(participant_id)
-        if success:
-            # Backup participants data after registration
-            self.database_backup.backup_participants_file()
-        else:
+        if not success:
             self.status_message_box.setText("Failed to register participant.")
             self.status_message_box.show()
 
@@ -157,8 +120,6 @@ class OscilloscopeApp(QtWidgets.QMainWindow):
         success = self.data_recorder.start_session()
         if success:
             self.experiment_active = True
-            # Backup sessions data after starting a new session
-            self.database_backup.backup_sessions_file()
         else:
             self.status_message_box.setText(
                 "Failed to start experiment session. Please register a participant first."
@@ -177,34 +138,38 @@ class OscilloscopeApp(QtWidgets.QMainWindow):
         """End the current experiment session"""
         self.experiment_active = False
         self.data_recorder.end_session()
-        
-        # Trigger a backup of the experiment data file that was just completed
-        if self.data_recorder.data_file:
-            self.database_backup.backup_measurements_file(self.data_recorder.data_file)
 
     @QtCore.pyqtSlot(float, float, float)
     def record_data_sample(
-        self, elapsed_time: float, vertical_voltage: float, horizontal_voltage: float
+        self, time_point: float, vertical_voltage: float, horizontal_voltage: float
     ) -> None:
         """Record a data sample if experiment is active"""
         if self.experiment_active:
             self.data_recorder.store_measurement(
-                elapsed_time, vertical_voltage, horizontal_voltage
+                time_point, vertical_voltage, horizontal_voltage
             )
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         """Clean up resources when closing the application"""
-        # End any active experiment
-        if self.experiment_active:
-            self.end_experiment()
+        try:
+            # Stop timers and data collection first
+            self.signal_generator.port_scan_timer.stop()
+            self.signal_generator.data_watchdog.stop()
+            
+            # End any active experiment
+            if self.experiment_active:
+                self.end_experiment()
 
-        # Clean up data recorder resources
-        self.data_recorder.cleanup()
-        
-        # Clean up database backup resources
-        self.database_backup.cleanup()
+            # Clean up data recorder resources with a timeout
+            self.data_recorder.cleanup()
 
-        # Disconnect from serial port when closing
-        self.signal_generator.disconnect()
-
-        super().closeEvent(event)
+            # Disconnect from serial port when closing
+            if self.signal_generator.serial_port.isOpen():
+                self.signal_generator.disconnect()
+                
+            # Accept the event directly - no delayed closing
+            event.accept()
+        except Exception as e:
+            print(f"Error during application close: {e}")
+            # Ensure the application closes even if there's an error
+            event.accept()

@@ -23,6 +23,10 @@ class OscilloscopeDisplay(QtWidgets.QWidget):
         super().__init__(parent)
         self.layout = QtWidgets.QVBoxLayout(self)
 
+        # Store original parameters for recreation if needed
+        self.original_pen_color = pen_color
+        self.original_signal_name = signal_name
+
         # Create oscilloscope plot
         self.plot_graph = pg.PlotWidget()
         self.layout.addWidget(self.plot_graph)
@@ -40,8 +44,8 @@ class OscilloscopeDisplay(QtWidgets.QWidget):
         self.MAX_POINTS = 5000
 
         # Create data arrays of fixed size, filled with zeros initially
-        self.voltage_data = np.zeros(self.MAX_POINTS)
-        self.sample_indices = np.arange(self.MAX_POINTS)
+        self.voltage_data = np.zeros(self.MAX_POINTS, dtype=np.float64)
+        self.sample_indices = np.arange(self.MAX_POINTS, dtype=np.float64)
 
         # Counter for positioning new data in the circular buffer
         self.current_index = 0
@@ -73,11 +77,83 @@ class OscilloscopeDisplay(QtWidgets.QWidget):
 
     def reset_plot(self) -> None:
         """Reset the oscilloscope plot data"""
-        self.voltage_data = np.zeros(self.MAX_POINTS)
+        # Reset data arrays with explicit dtype
+        self.voltage_data = np.zeros(self.MAX_POINTS, dtype=np.float64)
+        self.sample_indices = np.arange(self.MAX_POINTS, dtype=np.float64)
         self.current_index = 0
         self.sample_count = 0
-        self.signal_line.setData(self.sample_indices, self.voltage_data)
+
+        # Try to safely update the plot
+        try:
+            # Simple update
+            self.signal_line.setData(self.sample_indices, self.voltage_data)
+        except Exception:
+            # If any error occurs, completely recreate the plot
+            try:
+                self.plot_graph.clear()
+                
+                # Use stored original values
+                pen = pg.mkPen(color=self.original_pen_color, width=2)
+                self.signal_line = self.plot_graph.plot(
+                    self.sample_indices,
+                    self.voltage_data,
+                    name=self.original_signal_name,
+                    pen=pen,
+                    symbol=None,
+                )
+                
+                # Restore axis settings
+                self.plot_graph.setXRange(0, self.MAX_POINTS, padding=0)
+                self.plot_graph.setYRange(0, 5, padding=0)
+                self.plot_graph.disableAutoRange()
+            except Exception:
+                # Last resort - initialize from scratch
+                self._reinitialize_plot()
+                
         self.data_changed = False
+        
+    def _reinitialize_plot(self) -> None:
+        """Completely reinitialize the plot from scratch"""
+        try:
+            # Remove old plot widget
+            if hasattr(self, 'plot_graph'):
+                self.layout.removeWidget(self.plot_graph)
+                self.plot_graph.deleteLater()
+                
+            # Create completely new plot
+            self.plot_graph = pg.PlotWidget()
+            self.layout.addWidget(self.plot_graph)
+            self.plot_graph.setBackground("w")
+            
+            # Configure plot
+            self.plot_graph.setTitle(self.original_signal_name, color="b", size="20pt")
+            styles = {"color": "blue", "font-size": "16px"}
+            self.plot_graph.setLabel("left", "Voltage (V)", **styles)
+            self.plot_graph.setLabel("bottom", "Samples", **styles)
+            self.plot_graph.addLegend()
+            self.plot_graph.showGrid(x=True, y=True)
+            
+            # Create new line
+            pen = pg.mkPen(color=self.original_pen_color, width=2)
+            self.signal_line = self.plot_graph.plot(
+                self.sample_indices, 
+                self.voltage_data,
+                name=self.original_signal_name,
+                pen=pen,
+                symbol=None
+            )
+            
+            # Set ranges
+            self.plot_graph.setXRange(0, self.MAX_POINTS, padding=0)
+            self.plot_graph.setYRange(0, 5, padding=0)
+            self.plot_graph.disableAutoRange()
+            
+            # Disable interactions
+            self.plot_graph.setMouseEnabled(x=False, y=False)
+            self.plot_graph.setMenuEnabled(False)
+        except Exception:
+            # If this fails, we can't do much else
+            pass
 
     def add_data_point(self, timestamp: float, voltage: float) -> None:
         """Add a new data point using a circular buffer approach"""
@@ -106,11 +182,37 @@ class OscilloscopeDisplay(QtWidgets.QWidget):
         if not self.data_changed:
             return
 
-        # Just plot the data directly, no need to rearrange since we're resetting at MAX_POINTS
-        self.signal_line.setData(self.sample_indices, self.voltage_data)
+        # Try to update the plot safely
+        try:
+            self.signal_line.setData(self.sample_indices, self.voltage_data)
+        except Exception:
+            # If updating fails, use the same recovery mechanism as reset_plot
+            try:
+                # First attempt is just to recreate the plot line
+                self.plot_graph.clear()
+                pen = pg.mkPen(color=self.original_pen_color, width=2)
+                self.signal_line = self.plot_graph.plot(
+                    self.sample_indices,
+                    self.voltage_data,
+                    name=self.original_signal_name,
+                    pen=pen,
+                    symbol=None,
+                )
+                
+                # Restore settings
+                self.plot_graph.setXRange(0, self.MAX_POINTS, padding=0)
+                self.plot_graph.setYRange(0, 5, padding=0)
+                self.plot_graph.disableAutoRange()
+            except Exception:
+                # Full reset if that fails
+                self._reinitialize_plot()
 
-        # Emit signal with data for statistics
-        self.dataUpdated.emit(self.voltage_data, self.sample_indices)
+        try:
+            # Try to emit signal with data for statistics
+            self.dataUpdated.emit(self.voltage_data, self.sample_indices)
+        except Exception:
+            # Ignore errors with signal emission
+            pass
 
         self.data_changed = False
 

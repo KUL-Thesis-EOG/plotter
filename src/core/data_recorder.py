@@ -81,14 +81,16 @@ class DataRecorder(QObject):
                 writer.writerow(
                     ["session_id", "participant_id", "started_at", "data_file"]
                 )
-                
+
     def _check_and_flush_buffer(self) -> None:
         """Check if buffer needs flushing and do it"""
         buffer_threshold = 10
-        
-        if len(self.buffer) >= buffer_threshold or (self.buffer and not self.experiment_running):
+
+        if len(self.buffer) >= buffer_threshold or (
+            self.buffer and not self.experiment_running
+        ):
             self._flush_buffer()
-            
+
     def _flush_buffer(self) -> None:
         """Flush the current data buffer to file"""
         if not self.buffer or not self.data_file_handle:
@@ -215,9 +217,7 @@ class DataRecorder(QObject):
 
         try:
             # Add to buffer - store timestamp and raw values
-            self.buffer.append(
-                (time.time(), vertical_value, horizontal_value)
-            )
+            self.buffer.append((time.time(), vertical_value, horizontal_value))
             return True
         except Exception as e:
             self.statusChanged.emit(False, f"Error storing measurement: {str(e)}")
@@ -272,7 +272,7 @@ class DataRecorder(QObject):
 
         # Stop the flush timer
         self.flush_timer.stop()
-        
+
         # Flush any remaining data immediately
         self._flush_buffer()
 

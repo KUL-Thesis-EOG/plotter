@@ -99,9 +99,7 @@ class ParticipantControlPanel(QtWidgets.QGroupBox):
 
             # Update UI state
             self.start_button.setText("Stop Recording")
-            self.start_button.setStyleSheet(
-                "font-weight: bold;"
-            )
+            self.start_button.setStyleSheet("font-weight: bold;")
             self.pause_button.setEnabled(True)
             self.end_button.setEnabled(True)
 

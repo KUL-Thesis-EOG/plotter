@@ -1,4 +1,5 @@
 from PyQt6 import QtWidgets, QtCore, QtGui
+import numpy as np
 
 # Import core components
 from src.core.signal_generator import SerialSignalGenerator
@@ -93,19 +94,32 @@ class OscilloscopeApp(QtWidgets.QMainWindow):
         self.signal_generator.newSample.connect(self.horizontal_channel.add_sample)
         self.signal_generator.newSample.connect(self.record_data_sample)
 
-
     def handle_connection_status(self, connected: bool, message: str) -> None:
         """Handle connection status changes with potential alerts"""
         # Show message box for any disconnection except manual "Disconnected" action
         if not connected:
-            # Reset oscilloscope displays and clear buffers when device is disconnected
-            self.vertical_channel.reset_plot()
-            self.horizontal_channel.reset_plot()
-            
-            # Show alert message for unexpected disconnections
+            # Only show one alert message for unexpected disconnections
             if message != "Disconnected":
-                self.status_message_box.setText(message)
-                self.status_message_box.show()
+                # Prevent multiple popups by checking if a dialog is already visible
+                if not self.status_message_box.isVisible():
+                    self.status_message_box.setText(message)
+                    self.status_message_box.show()
+            
+            # Safely reset oscilloscope displays and clear buffers
+            try:
+                # We'll set empty data instead of calling reset_plot to avoid recursive errors
+                self.vertical_channel.voltage_data = np.zeros(self.vertical_channel.MAX_POINTS, dtype=np.float64)
+                self.vertical_channel.current_index = 0
+                self.vertical_channel.sample_count = 0
+                self.vertical_channel.data_changed = False
+                
+                self.horizontal_channel.voltage_data = np.zeros(self.horizontal_channel.MAX_POINTS, dtype=np.float64) 
+                self.horizontal_channel.current_index = 0
+                self.horizontal_channel.sample_count = 0
+                self.horizontal_channel.data_changed = False
+            except Exception:
+                # Ignore any errors in the reset process
+                pass
 
     def register_participant(self, participant_id: int) -> None:
         """Register a participant in the data recorder"""
@@ -155,7 +169,7 @@ class OscilloscopeApp(QtWidgets.QMainWindow):
             # Stop timers and data collection first
             self.signal_generator.port_scan_timer.stop()
             self.signal_generator.data_watchdog.stop()
-            
+
             # End any active experiment
             if self.experiment_active:
                 self.end_experiment()
@@ -166,7 +180,7 @@ class OscilloscopeApp(QtWidgets.QMainWindow):
             # Disconnect from serial port when closing
             if self.signal_generator.serial_port.isOpen():
                 self.signal_generator.disconnect()
-                
+
             # Accept the event directly - no delayed closing
             event.accept()
         except Exception as e:

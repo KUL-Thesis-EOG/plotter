@@ -1,10 +1,10 @@
-# Arduino Serial Oscilloscope - Experiment Recorder
+# Arduino Serial Oscilloscope - Simplified
 
 A PyQt6-based application that functions as a dual-channel oscilloscope for Arduino signals while recording experimental data.
 
 ## Overview
 
-This application provides a real-time visualization and recording system for analog signals from an Arduino. It features dual-channel oscilloscope displays, comprehensive control panels, participant management, and experimental data recording capabilities.
+This application provides a real-time visualization and recording system for analog signals from an Arduino. It features dual-channel oscilloscope displays, basic control panels, participant management, and experimental data recording capabilities.
 
 ![Application](images/App.png)
 
@@ -12,9 +12,8 @@ This application provides a real-time visualization and recording system for ana
 
 - **Real-time dual-channel oscilloscope display**
   - Vertical and horizontal signal visualization
-  - Adjustable time and voltage ranges
-  - Auto-scrolling display with "View All" option
-  - Real-time signal statistics (average, peak, samples/second)
+  - Fixed display window showing 5000 samples
+  - Auto-scaling display
 
 - **Arduino serial connection management**
   - Automatic port detection and connection
@@ -25,13 +24,11 @@ This application provides a real-time visualization and recording system for ana
 - **Experiment management**
   - Participant registration system
   - Session control (start, pause, resume, end)
-  - Comprehensive data recording with timestamps
+  - Data recording with timestamps
 
 - **Data management**
   - CSV-based data storage for maximum compatibility
   - Background data buffering for performance
-  - Automatic backup system
-  - Session and participant tracking
 
 ## Hardware Requirements
 
@@ -76,24 +73,18 @@ python main.py
    - Status will update to "Connected" when successful
 
 2. **Register a Participant:**
-   - Enter Participant ID in the Participant Control panel
+   - Enter Participant ID in the Experiment Control panel
    - Click "Register"
-   - Participant data will be saved to the experiment database
+   - Participant data will be saved to the experiment data files
 
 3. **Start an Experiment Session:**
-   - After registering a participant, click "Start Session"
-   - The recording status will change to "Recording"
+   - After registering a participant, click "Start Recording"
+   - The recording status will change to indicate recording is active
    - Data from both channels will now be recorded
 
-4. **Control the Display:**
-   - Adjust time range (5s, 10s, 20s) using Time Control panel
-   - Set voltage ranges using Voltage Control panel
-   - Use "View All" to see the entire dataset
-
-5. **Manage the Session:**
+4. **Manage the Session:**
    - Pause/Resume recording using the session controls
    - Click "End Session" to complete the experiment
-   - Data is automatically backed up when a session ends
 
 ### Data Files
 
@@ -105,7 +96,6 @@ The application creates an `experiment_data` directory containing:
 
 Data format:
 - timestamp: Unix timestamp when the measurement was taken
-- elapsed_time: Time in seconds from the start of the recording
 - vertical_value: Voltage reading from the vertical channel (0-5V)
 - horizontal_value: Voltage reading from the horizontal channel (0-5V)
 
@@ -156,7 +146,8 @@ void loop() {
 
 - Format code: `black .`
 - Type check: `mypy .`
-- Lint code: `pylint main.py`
+- Lint code: `pylint main.py` or `pylint src/`
+- Run application: `python main.py`
 
 ## Architecture
 
@@ -165,13 +156,13 @@ The application follows a modular architecture with separation of concerns:
 - **Core Components:**
   - `signal_generator.py`: Handles Arduino communication and signal processing
   - `data_recorder.py`: Manages data recording and storage
-  - `database_backup.py`: Handles data backup operations
 
 - **UI Components:**
   - `app.py`: Main application window and component orchestration
   - `oscilloscope_display.py`: Signal visualization widgets
   - `control_panel.py`: Container for all control panels
-  - Sub-panels: Individual control components for specific functions
+  - `serial_control.py`: Serial connection management
+  - `participant_control.py`: Participant and session management
 
 - **Communication:**
   - The application uses Qt's signal/slot mechanism for inter-component communication

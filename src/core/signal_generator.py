@@ -110,46 +110,87 @@ class SerialSignalGenerator(QObject):
 
     def _handle_error(self, error: QSerialPort.SerialPortError) -> None:
         """Handle serial port errors"""
-        if error != QSerialPort.SerialPortError.NoError:
-            error_msg = self._get_error_message(error)
+        try:
+            # Use direct comparisons with exceptions handling to avoid recursion issues
+            if error != QSerialPort.SerialPortError.NoError:
+                try:
+                    error_msg = self._get_error_message(error)
+                except (RecursionError, TypeError):
+                    error_msg = "Unknown error"
 
-            # ResourceError typically means the device was unplugged
-            if error == QSerialPort.SerialPortError.ResourceError:
-                self.connectionStatusChanged.emit(
-                    False, f"Device disconnected: {error_msg}"
-                )
-            else:
-                self.connectionStatusChanged.emit(False, f"Serial error: {error_msg}")
+                try:
+                    # ResourceError typically means the device was unplugged
+                    if error == QSerialPort.SerialPortError.ResourceError:
+                        self.connectionStatusChanged.emit(
+                            False, f"Device disconnected: {error_msg}"
+                        )
+                    else:
+                        self.connectionStatusChanged.emit(
+                            False, f"Serial error: {error_msg}"
+                        )
+                except RecursionError:
+                    self.connectionStatusChanged.emit(False, "Serial error occurred")
 
-            # Try to close and reopen if there's a recoverable error
-            if error in [
-                QSerialPort.SerialPortError.ResourceError,
-                QSerialPort.SerialPortError.TimeoutError,
-                QSerialPort.SerialPortError.ReadError,
-            ]:
-                port_name = self.serial_port.portName()
-                self.disconnect()
-                # Schedule a reconnection attempt
-                QTimer.singleShot(
-                    3000, lambda port=port_name: self.connect_to_port(port)
-                )
+                try:
+                    # Try to close and reopen if there's a recoverable error
+                    recoverable = False
+                    try:
+                        if error == QSerialPort.SerialPortError.ResourceError:
+                            recoverable = True
+                        elif error == QSerialPort.SerialPortError.TimeoutError:
+                            recoverable = True
+                        elif error == QSerialPort.SerialPortError.ReadError:
+                            recoverable = True
+                    except RecursionError:
+                        # If comparison fails, don't try to reconnect
+                        recoverable = False
+                        
+                    if recoverable:
+                        port_name = self.serial_port.portName()
+                        self.disconnect()
+                        # Schedule a reconnection attempt
+                        QTimer.singleShot(
+                            3000, lambda port=port_name: self.connect_to_port(port)
+                        )
+                except Exception:
+                    self.disconnect()
+                    
+        except Exception:
+            # Fall back to simplest handling if anything goes wrong
+            self.connectionStatusChanged.emit(False, "Serial port error occurred")
+            self.disconnect()
 
     def _get_error_message(self, error: QSerialPort.SerialPortError) -> str:
         """Convert QSerialPort error enum to a human-readable message"""
-        error_messages = {
-            QSerialPort.SerialPortError.NoError: "No error",
-            QSerialPort.SerialPortError.DeviceNotFoundError: "Device not found",
-            QSerialPort.SerialPortError.PermissionError: "Permission denied",
-            QSerialPort.SerialPortError.OpenError: "Failed to open port",
-            QSerialPort.SerialPortError.NotOpenError: "Port not open",
-            QSerialPort.SerialPortError.WriteError: "Write error",
-            QSerialPort.SerialPortError.ReadError: "Read error",
-            QSerialPort.SerialPortError.ResourceError: "Resource error (device disconnected)",
-            QSerialPort.SerialPortError.UnsupportedOperationError: "Unsupported operation",
-            QSerialPort.SerialPortError.TimeoutError: "Operation timed out",
-            QSerialPort.SerialPortError.UnknownError: "Unknown error",
-        }
-        return error_messages.get(error, f"Error code: {error}")
+        try:
+            # Try to directly match the error with the corresponding message
+            if error == QSerialPort.SerialPortError.NoError:
+                return "No error"
+            elif error == QSerialPort.SerialPortError.DeviceNotFoundError:
+                return "Device not found"
+            elif error == QSerialPort.SerialPortError.PermissionError:
+                return "Permission denied"
+            elif error == QSerialPort.SerialPortError.OpenError:
+                return "Failed to open port"
+            elif error == QSerialPort.SerialPortError.NotOpenError:
+                return "Port not open"
+            elif error == QSerialPort.SerialPortError.WriteError:
+                return "Write error"
+            elif error == QSerialPort.SerialPortError.ReadError:
+                return "Read error"
+            elif error == QSerialPort.SerialPortError.ResourceError:
+                return "Resource error (device disconnected)"
+            elif error == QSerialPort.SerialPortError.UnsupportedOperationError:
+                return "Unsupported operation"
+            elif error == QSerialPort.SerialPortError.TimeoutError:
+                return "Operation timed out"
+            elif error == QSerialPort.SerialPortError.UnknownError:
+                return "Unknown error"
+            else:
+                return f"Error code: {error}"
+        except (RecursionError, TypeError):
+            # Fallback if we get a recursion error in enum comparison
+            return "Serial port error (details unavailable)"
 
     def _read_data(self) -> None:
         """Read available data from serial port"""
@@ -200,9 +241,7 @@ class SerialSignalGenerator(QObject):
                 self.last_timestamp = current_time
 
                 # Emit the new sample with both channel values
-                self.newSample.emit(
-                    current_time, vertical_voltage, horizontal_voltage
-                )
+                self.newSample.emit(current_time, vertical_voltage, horizontal_voltage)
 
         except (ValueError, IndexError) as e:
             # Skip malformed data

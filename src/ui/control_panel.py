@@ -46,7 +46,7 @@ class ControlPanel(QtWidgets.QWidget):
             self.sessionResumeRequested
         )
         self.participant_panel.sessionEndRequested.connect(self.sessionEndRequested)
-        
+
         # Set stretch factors to make top panels take minimal space
         self.main_layout.setStretch(0, 0)  # Top panels - minimal space
         self.main_layout.setStretch(1, 1)  # Channel panels - all remaining space
